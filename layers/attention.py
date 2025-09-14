@@ -115,3 +115,16 @@ class SingleHeadAttention(nn.Module):
         x = attn @ v
         # then project to get output
         return self.Wo(x)
+
+
+"""
+Side note on Multi-head self-attn
+first, by projecting input to multi
+rand-init heads, trans will have multi repr subspaces for same input
+giving each trans layer ability to simul
+learn diff nuances for same in
+second, multi-heads allow attn to jointly attend to multi tokens at same time
+even if single wighted is well behaved,
+limits ability to focus on multiple
+ability to attend to multiple tokens at once
+"""
