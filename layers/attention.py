@@ -138,7 +138,14 @@ before projecting the MHA output through final linear layer
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, hidden_size: int, num_heads: int, bias: bool = True):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        attn_drop: float = 0.1,
+        out_drop: float = 0.1,
+        bias: bool = True,
+    ):
         # first need to project to hidden/numheads, so assert they'll work together
         assert hidden_size % num_heads == 0
         # num heads
@@ -146,6 +153,9 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         self.Wqkv = nn.Linear(hidden_size, hidden_size * 3, bias=bias)
         self.Wo = nn.Linear(hidden_size, hidden_size, bias=bias)
+        # dropout layers to prevent overfitting
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.out_drop = nn.Dropout(out_drop)
 
     # forward is mostly the same, few changes to account for multi-heads
     def forward(self, x):
@@ -155,12 +165,15 @@ class MultiHeadAttention(nn.Module):
         # same mechanism, but difference in tensor shape means we are calculating softmax individually per each head
         # (B, NH, S, S) = (B, NH, S, HS) @ (B, NH, HS, S)
         attn = q @ k.transpose(-2, -1)
+        # scale by sqrt of head
         attn = attn / math.sqrt(k.size(-1))
+        # apply softmax for attn weights
         attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
 
         # last steps are to matmul attn w v, then concat per-head attn into one output of our input
         # done by transposing heads and seqs then reshaping to B,S,C
         # mechanically same as concat, w/o req of making new tensor
         x = attn @ v
         x = x.transpose(1, 2).reshape(B, S, C)
-        return self.Wo(x)
+        return self.out_drop(self.Wo(x))
