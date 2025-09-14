@@ -127,4 +127,40 @@ second, multi-heads allow attn to jointly attend to multi tokens at same time
 even if single wighted is well behaved,
 limits ability to focus on multiple
 ability to attend to multiple tokens at once
+
+formally, MHA makes 1 QKV per head,
+calculates scaled dot prod attn per head
+concats attn outputs back into one tensor
+before projecting the MHA output through final linear layer
 """
+
+## Multi-head initialization
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, hidden_size: int, num_heads: int, bias: bool = True):
+        # first need to project to hidden/numheads, so assert they'll work together
+        assert hidden_size % num_heads == 0
+        # num heads
+        self.nh = num_heads
+        super().__init__()
+        self.Wqkv = nn.Linear(hidden_size, hidden_size * 3, bias=bias)
+        self.Wo = nn.Linear(hidden_size, hidden_size, bias=bias)
+
+    # forward is mostly the same, few changes to account for multi-heads
+    def forward(self, x):
+        B, S, C = x.shape
+        x = self.Wqkv(x).reshape(B, S, 3, self.nh, C // self.nh)
+        q, k, v = x.transpose(3, 1).unbind(dim=2)
+        # same mechanism, but difference in tensor shape means we are calculating softmax individually per each head
+        # (B, NH, S, S) = (B, NH, S, HS) @ (B, NH, HS, S)
+        attn = q @ k.transpose(-2, -1)
+        attn = attn / math.sqrt(k.size(-1))
+        attn = attn.softmax(dim=-1)
+
+        # last steps are to matmul attn w v, then concat per-head attn into one output of our input
+        # done by transposing heads and seqs then reshaping to B,S,C
+        # mechanically same as concat, w/o req of making new tensor
+        x = attn @ v
+        x = x.transpose(1, 2).reshape(B, S, C)
+        return self.Wo(x)
