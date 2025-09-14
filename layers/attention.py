@@ -1,6 +1,5 @@
-# import math
+import math
 
-# import torch
 import torch.nn as nn
 # from torch import Tensor, BoolTensor
 # from torch.nn import functional as F
@@ -83,8 +82,36 @@ class SingleHeadAttention(nn.Module):
         # equiv to 3 individual lin layers with same in/out shape
         # in multi-head, each head size is smaller than input, so for single head
         # arbitrarily set head size to be 4x smaller than input
-        Wqkv = nn.Linear(hidden_size, (hidden_size // 4) * 3, bias=bias)
+        self.Wqkv = nn.Linear(hidden_size, (hidden_size // 4) * 3, bias=bias)
         # like Wqkv layer, attn layer lin proj
         # layer has optional bias term
         # in single head, projects attended tokens to original shape
-        proj = nn.Linear(hidden_size // 4, hidden_sizebias=bias)
+        self.Wo = nn.Linear(hidden_size // 4, hidden_sizebias=bias)
+
+    def forward(self, x):
+        # single head forward
+        # first comp step is to generate QKV.
+        # first, pass input x through Wqkv linear
+        # reshape output into batch size,
+        # one dim for QKV and head size
+        # finally, split single tensor into query using unbind
+        # batch size, seq len, in dimension
+        B, S, C = x.shape
+        # split into QKVs of shape B, seq len S, head size HS
+        q, k, v = self.Wqkv(x).reshape(B, S, 3, C // 4).unbind(dim=2)
+        # now move to math ops of attn
+        # first transpose K, take dot of Q and KT
+        # calc dot prod of qs and ks of shape
+        # (B,S,S) = (B,S,HS) @ (B, HS, S)
+        attn = q @ k.transpose(-2, -1)
+        # scale by sqrt of head dim
+        attn = attn / math.sqrt(k.size(-1))
+        # now apply softmax
+        attn = attn.softmax(dim=-1)
+        # softmax out is how the attn mech weights
+        # strength of the relationship btwn pairs of tokens
+        # higher softmax val == more importance on that pair of tokens
+        # next matmul attn weights w value matrix V, applies attn weights to propagating token embeddings
+        x = attn @ v
+        # then project to get output
+        return self.Wo(x)
