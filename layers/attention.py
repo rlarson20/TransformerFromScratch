@@ -1,7 +1,7 @@
 import math
 
 import torch.nn as nn
-# from torch import Tensor, BoolTensor
+from torch import Tensor, BoolTensor
 # from torch.nn import functional as F
 
 """
@@ -88,7 +88,7 @@ class SingleHeadAttention(nn.Module):
         # in single head, projects attended tokens to original shape
         self.Wo = nn.Linear(hidden_size // 4, hidden_sizebias=bias)
 
-    def forward(self, x):
+    def forward(self, x: Tensor):
         # single head forward
         # first comp step is to generate QKV.
         # first, pass input x through Wqkv linear
@@ -137,7 +137,7 @@ before projecting the MHA output through final linear layer
 ## Multi-head initialization
 
 
-class MultiHeadAttention(nn.Module):
+class BidirectionalAttention(nn.Module):
     def __init__(
         self,
         hidden_size: int,
@@ -158,7 +158,12 @@ class MultiHeadAttention(nn.Module):
         self.out_drop = nn.Dropout(out_drop)
 
     # forward is mostly the same, few changes to account for multi-heads
-    def forward(self, x):
+    # bi-di attn needs to attend to all tokens in in seq
+    # mask exists to support batching diff len seq
+    # typically, enc/enc-dec transformer will have
+    # pad token, but pad tokens shouldn't interact w sequence tokens
+    # this is where mask comes in
+    def forward(self, x: Tensor, mask: BoolTensor):
         B, S, C = x.shape
         x = self.Wqkv(x).reshape(B, S, 3, self.nh, C // self.nh)
         q, k, v = x.transpose(3, 1).unbind(dim=2)
@@ -167,6 +172,10 @@ class MultiHeadAttention(nn.Module):
         attn = q @ k.transpose(-2, -1)
         # scale by sqrt of head
         attn = attn / math.sqrt(k.size(-1))
+
+        # reshape and mask attn scores
+        attn = attn.masked_fill(mask.view(B, 1, 1, S), float("-inf"))
+
         # apply softmax for attn weights
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
