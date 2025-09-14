@@ -1,5 +1,6 @@
 import math
 
+import torch
 import torch.nn as nn
 from torch import Tensor, BoolTensor
 # from torch.nn import functional as F
@@ -184,5 +185,110 @@ class BidirectionalAttention(nn.Module):
         # done by transposing heads and seqs then reshaping to B,S,C
         # mechanically same as concat, w/o req of making new tensor
         x = attn @ v
+        x = x.transpose(1, 2).reshape(B, S, C)
+        return self.out_drop(self.Wo(x))
+
+
+class BidirectionalAttention(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        attn_drop: float = 0.1,
+        out_drop: float = 0.1,
+        bias: bool = True,
+    ):
+        # first need to project to hidden/numheads, so assert they'll work together
+        assert hidden_size % num_heads == 0
+        # num heads
+        self.nh = num_heads
+        super().__init__()
+        self.Wqkv = nn.Linear(hidden_size, hidden_size * 3, bias=bias)
+        self.Wo = nn.Linear(hidden_size, hidden_size, bias=bias)
+        # dropout layers to prevent overfitting
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.out_drop = nn.Dropout(out_drop)
+
+    # forward is mostly the same, few changes to account for multi-heads
+    # bi-di attn needs to attend to all tokens in in seq
+    # mask exists to support batching diff len seq
+    # typically, enc/enc-dec transformer will have
+    # pad token, but pad tokens shouldn't interact w sequence tokens
+    # this is where mask comes in
+    def forward(self, x: Tensor, mask: BoolTensor):
+        B, S, C = x.shape
+        x = self.Wqkv(x).reshape(B, S, 3, self.nh, C // self.nh)
+        q, k, v = x.transpose(3, 1).unbind(dim=2)
+        # same mechanism, but difference in tensor shape means we are calculating softmax individually per each head
+        # (B, NH, S, S) = (B, NH, S, HS) @ (B, NH, HS, S)
+        attn = q @ k.transpose(-2, -1)
+        # scale by sqrt of head
+        attn = attn / math.sqrt(k.size(-1))
+
+        # reshape and mask attn scores
+        attn = attn.masked_fill(mask.view(B, 1, 1, S), float("-inf"))
+
+        # apply softmax for attn weights
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        # last steps are to matmul attn w v, then concat per-head attn into one output of our input
+        # done by transposing heads and seqs then reshaping to B,S,C
+        # mechanically same as concat, w/o req of making new tensor
+        x = attn @ v
+        x = x.transpose(1, 2).reshape(B, S, C)
+        return self.out_drop(self.Wo(x))
+
+
+# use upper triang matrix for causal mask
+# ensure curr token can only attend to past tokens
+#
+# create permament causal_mask of shape [context_size,context_size] in init, where ctx_size is max con len of transformer
+# to match our padding attn mask, create matrix of bool ones
+# then use triu to make upper triang, using diagonal=1 to shift diagonal one to upper-right
+# then reshape input to be broadcastable across dims of QK^T, which is B, NH, S, S and assign to
+# pytorch buffer
+class CausalAttention(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        context_size: int,
+        attn_drop: float = 0.1,
+        out_drop: float = 0.1,
+        bias: bool = True,
+    ):
+        assert hidden_size % num_heads == 0
+        self.nh = num_heads
+        super().__init__()
+        self.Wqkv = nn.Linear(hidden_size, hidden_size * 3, bias=bias)
+        self.Wo = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.out_drop = nn.Dropout(out_drop)
+
+        self.register_buffer(
+            "causal_mask",
+            torch.triu(
+                torch.ones([context_size, context_size], dtype=torch.bool), diagonal=1
+            ).view(1, 1, context_size, context_size),
+        )
+
+    def forward(self, x: Tensor, mask: BoolTensor):
+        B, S, C = x.shape
+
+        x = self.Wqkv(x).reshape(B, S, 3, self.nh, C // self.nh)
+        q, k, v = x.transpose(3, 1).unbind(dim=2)
+
+        attn = q @ k.transpose(-2, -1)
+        attn = attn / math.sqrt(k.size(-1))
+
+        combined_mask = self.causal_mask[:, :, :S, :S] + mask.view(B, 1, 1, S)
+        attn = attn.masked_fill(combined_mask, float("-inf"))
+
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = attn @ v
+
         x = x.transpose(1, 2).reshape(B, S, C)
         return self.out_drop(self.Wo(x))
