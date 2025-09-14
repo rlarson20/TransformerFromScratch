@@ -292,3 +292,83 @@ class CausalAttention(nn.Module):
 
         x = x.transpose(1, 2).reshape(B, S, C)
         return self.out_drop(self.Wo(x))
+
+
+"""
+All versions of attn have been self-attention
+cross attention applies across input sequences
+
+formal def needs some modifications
+author of articles follows original cross attn
+where the query Q is made from first seq X and both keys and vals from second seq Y
+
+Not set in stone
+other transformer models adopt diff allocations of the first and second sequence across the QKV
+
+Formal defn is same, but
+Q_X, K_Y, V_Y representing MH Qs, Ks, and Vs for inputs x and y respectively
+
+Q_X = XW_{h}^{Q}
+K_Y = YW_{h}^{K}
+V_Y = YW_{h}^{V}
+
+CrossAttn(Q_X,K_Y,V_Y) = softmax(Q_X K_Y^T/sqrt(d_h))V_Y
+
+output = CrossAttn(Q_X,K_Y,V_Y)W^O
+
+requires separate lin layers for qs and kvs
+
+other than that, assuming this is in decoder side of enc-dec trans, everything after making QKV is same as causal attn
+if making it for encoder style attn layer,
+would remove causal mask and keep input mask if appropriate
+"""
+
+
+class CausalCrossAttention(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        context_size: int,
+        attn_drop: float = 0.1,
+        out_drop: float = 0.1,
+        bias: bool = True,
+    ):
+        super().__init__()
+        assert hidden_size % num_heads == 0
+        self.nh = num_heads
+        self.Wq = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.Wkv = nn.Linear(hidden_size, hidden_size * 2, bias=bias)
+        self.Wo = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.out_drop = nn.Dropout(out_drop)
+        self.register_buffer(
+            "causal_mask",
+            torch.triu(
+                torch.ones([context_size, context_size], dtype=torch.bool), diagonal=1
+            ).view(1, 1, context_size, context_size),
+        )
+
+    def forward(self, x: Tensor, y: Tensor, mask: BoolTensor):
+        B, S, C = x.shape
+
+        # split into qs of shape B,NH,S,HS from decoder input
+        q = self.Wq(x).reshape(B, S, self.nh)
+
+        # split into keys and vals of shape (B,NH,S,HS) from encoder output
+        y = self.Wky(y).reshape(B, S, 2, self.nh, C // self.nh)
+        k, v = y.transpose(3, 1).unbind(dim=2)
+
+        attn = q @ k.transpose(-2, -1)
+        attn = attn / math.sqrt(k.size(-1))
+
+        combined_mask = self.causal_mask + mask.view(B, 1, 1, S)
+        attn = attn.masked_fill(combined_mask, float("-inf"))
+
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = attn @ v
+
+        x = x.transpose(1, 2).reshape(B, S, C)
+        return self.out_drop(self.Wo(x))
