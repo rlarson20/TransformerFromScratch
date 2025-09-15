@@ -87,7 +87,7 @@ class SingleHeadAttention(nn.Module):
         # like Wqkv layer, attn layer lin proj
         # layer has optional bias term
         # in single head, projects attended tokens to original shape
-        self.Wo = nn.Linear(hidden_size // 4, hidden_sizebias=bias)
+        self.Wo = nn.Linear(hidden_size // 4, hidden_size, bias=bias)
 
     def forward(self, x: Tensor):
         # single head forward
@@ -189,57 +189,6 @@ class BidirectionalAttention(nn.Module):
         return self.out_drop(self.Wo(x))
 
 
-class BidirectionalAttention(nn.Module):
-    def __init__(
-        self,
-        hidden_size: int,
-        num_heads: int,
-        attn_drop: float = 0.1,
-        out_drop: float = 0.1,
-        bias: bool = True,
-    ):
-        # first need to project to hidden/numheads, so assert they'll work together
-        assert hidden_size % num_heads == 0
-        # num heads
-        self.nh = num_heads
-        super().__init__()
-        self.Wqkv = nn.Linear(hidden_size, hidden_size * 3, bias=bias)
-        self.Wo = nn.Linear(hidden_size, hidden_size, bias=bias)
-        # dropout layers to prevent overfitting
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.out_drop = nn.Dropout(out_drop)
-
-    # forward is mostly the same, few changes to account for multi-heads
-    # bi-di attn needs to attend to all tokens in in seq
-    # mask exists to support batching diff len seq
-    # typically, enc/enc-dec transformer will have
-    # pad token, but pad tokens shouldn't interact w sequence tokens
-    # this is where mask comes in
-    def forward(self, x: Tensor, mask: BoolTensor):
-        B, S, C = x.shape
-        x = self.Wqkv(x).reshape(B, S, 3, self.nh, C // self.nh)
-        q, k, v = x.transpose(3, 1).unbind(dim=2)
-        # same mechanism, but difference in tensor shape means we are calculating softmax individually per each head
-        # (B, NH, S, S) = (B, NH, S, HS) @ (B, NH, HS, S)
-        attn = q @ k.transpose(-2, -1)
-        # scale by sqrt of head
-        attn = attn / math.sqrt(k.size(-1))
-
-        # reshape and mask attn scores
-        attn = attn.masked_fill(mask.view(B, 1, 1, S), float("-inf"))
-
-        # apply softmax for attn weights
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-
-        # last steps are to matmul attn w v, then concat per-head attn into one output of our input
-        # done by transposing heads and seqs then reshaping to B,S,C
-        # mechanically same as concat, w/o req of making new tensor
-        x = attn @ v
-        x = x.transpose(1, 2).reshape(B, S, C)
-        return self.out_drop(self.Wo(x))
-
-
 # use upper triang matrix for causal mask
 # ensure curr token can only attend to past tokens
 #
@@ -282,7 +231,7 @@ class CausalAttention(nn.Module):
         attn = q @ k.transpose(-2, -1)
         attn = attn / math.sqrt(k.size(-1))
 
-        combined_mask = self.causal_mask[:, :, :S, :S] + mask.view(B, 1, 1, S)
+        combined_mask = self.causal_mask[:, :, :S, :S] | mask.view(B, 1, 1, S)
         attn = attn.masked_fill(combined_mask, float("-inf"))
 
         attn = attn.softmax(dim=-1)
@@ -353,7 +302,7 @@ class CausalCrossAttention(nn.Module):
         B, S, C = x.shape
 
         # split into qs of shape B,NH,S,HS from decoder input
-        q = self.Wq(x).reshape(B, S, self.nh)
+        q = self.Wq(x).reshape(B, S, C // self.nh).transpose(1, 2)
 
         # split into keys and vals of shape (B,NH,S,HS) from encoder output
         y = self.Wky(y).reshape(B, S, 2, self.nh, C // self.nh)
