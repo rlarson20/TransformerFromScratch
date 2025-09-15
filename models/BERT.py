@@ -3,7 +3,47 @@ from layers.attention import BidirectionalAttention
 import torch
 from torch import Tensor
 import torch.nn as nn
-from models.GPT2 import PositionalEncoding, TransformerBlock
+from models.GPT2 import FeedForward, PositionalEncoding
+
+
+class TransformerBlock(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        context_size: int,
+        expand_size: int,
+        attention: nn.Module = BidirectionalAttention,
+        act: nn.Module = nn.GELU,
+        attn_drop: float = 0.1,
+        out_drop: float = 0.1,
+        ffn_drop: float = 0.1,
+        bias: bool = True,
+    ):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(hidden_size)
+        self.attn = attention(
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            context_size=context_size,
+            attn_drop=attn_drop,
+            out_drop=out_drop,
+            bias=bias,
+        )
+        self.norm2 = nn.LayerNorm(hidden_size)
+        self.ffn = FeedForward(
+            hidden_size=hidden_size,
+            expand_size=expand_size,
+            act=act,
+            drop=ffn_drop,
+            bias=bias,
+        )
+
+    def forward(self, x: Tensor):
+        # im using pre-norm here
+        x = x + self.attn(self.norm1(x))
+        # normalize input then add resid to ff out
+        return x + self.ffn(self.norm2(x))
 
 
 class BERT(nn.Module):
