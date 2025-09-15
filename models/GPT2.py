@@ -295,6 +295,7 @@ class GPT2(nn.Module):
         head_bias: bool = True,
         bias: bool = True,
     ):
+        super().__init__()
         # init vocab and pos embeddings
         self.vocab_embed = nn.Embedding(vocab_size, hidden_size)
         self.pos_embed = nn.Embedding(context_size, hidden_size)
