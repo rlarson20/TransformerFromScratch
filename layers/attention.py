@@ -231,7 +231,9 @@ class CausalAttention(nn.Module):
         attn = q @ k.transpose(-2, -1)
         attn = attn / math.sqrt(k.size(-1))
 
-        combined_mask = self.causal_mask[:, :, :S, :S] | mask.view(B, 1, 1, S)
+        combined_mask = self.causal_mask[:, :, :S, :S]
+        if mask is not None:
+            combined_mask = combined_mask | mask.view(B, 1, 1, S)
         attn = attn.masked_fill(combined_mask, float("-inf"))
 
         attn = attn.softmax(dim=-1)

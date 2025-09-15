@@ -156,7 +156,7 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x: Tensor):
         # im using pre-norm here
-        x = x + self.attn(self.norm1(x))
+        x = x + self.attn(self.norm1(x), mask=None)
         # normalize input then add resid to ff out
         return x + self.ffn(self.norm2(x))
 
@@ -296,6 +296,7 @@ class GPT2(nn.Module):
         bias: bool = True,
     ):
         super().__init__()
+        self.num_layers = num_layers
         # init vocab and pos embeddings
         self.vocab_embed = nn.Embedding(vocab_size, hidden_size)
         self.pos_embed = nn.Embedding(context_size, hidden_size)
@@ -329,7 +330,7 @@ class GPT2(nn.Module):
         self.head = nn.Linear(hidden_size, vocab_size, bias=head_bias)
 
         if tie_weights:
-            self.head_weight = self.vocab_embed.weight
+            self.head.weight = self.vocab_embed.weight
 
         # precreate pos indices
         pos = torch.arange(0, context_size, dtype=torch.long)
