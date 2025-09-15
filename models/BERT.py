@@ -1,3 +1,4 @@
+import math
 from layers.attention import BidirectionalAttention
 import torch
 from torch import Tensor
@@ -83,24 +84,33 @@ class BERT(nn.Module):
 
 
 class BERTForMaskedLM(BERT):
-    def __init__(self, loss_fn: nn.Module = nn.CrossEntropyLoss(), **kwargs):
+    def __init__(
+        self,
+        loss_fn: nn.Module = nn.CrossEntropyLoss(),
+        mlm_prob: float | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.loss_fn = loss_fn
+        self.mlm_prob = mlm_prob
 
-    def forward(self, x: Tensor, labels: Tensor):
-        tokens = self.vocab_embed(x)
-        pos = self.pos_encode(self.pos[: x.shape[1]])
+    def forward(self, input_ids: Tensor, labels: Tensor, mlm_prob: float | None = None):
+        x = super().forward(input_ids, False)
 
-        x = self.embed_drop(tokens + pos)
-
-        for block in self.tfm_blocks:
-            x = block(x)
-
-        x = self.head_norm(x)
+        labels = labels.view(-1)
+        x = x.view(labels.shape[0], -1)
 
         mask_tokens = labels != self.loss_fn.ignore_index
-        x = x[mask_tokens]
-        labels = labels[mask_tokens]
+
+        mlm_prob = self.mlm_prob if mlm_prob is None else mlm_prob
+        if mlm_prob is not None:
+            num_masks = math.floor(self.mlm_prob * mask_tokens.shape[0])
+        else:
+            num_masks = mask_tokens.sum().int()
+
+        indices = torch.argsort(mask_tokens.int())[-num_masks:]
+        x = x[indices]
+        labels = labels[indices]
 
         logits = self.head(x)
 
